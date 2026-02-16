@@ -9,29 +9,15 @@ HIGH_CUT = 3050         # Upper bound of crepitus band (Hz)
 ORDER = 5               # 5th Order as per design
 
 def apply_butterworth_filter(data, lowcut, highcut, fs, order=5):
-    """
-    Creates and applies a digital Butterworth bandpass filter using SOS.
-    """
-    # Create the filter coefficients in SOS format
     sos = signal.butter(order, [lowcut, highcut], btype='band', fs=fs, output='sos')
-    
-    # Apply the filter to the data
     filtered_data = signal.sosfilt(sos, data)
     return filtered_data
 
 def calculate_crepitus_index(raw_data, filtered_data):
-    """
-    Calculates the ratio of power in the target band vs total power (F2 score).
-    """
     total_power = np.sum(np.square(raw_data - np.mean(raw_data)))
     band_power = np.sum(np.square(filtered_data))
-    
-    # Avoid division by zero
     if total_power == 0: return 0
     return (band_power / total_power) * 100
-
-# --- Example Usage with Simulated Data ---
-# In your final app, 'raw_data' will be the array received from the ESP32
 t = np.linspace(0, 2, 2 * FS)  # 2 seconds of time
 noise = np.random.normal(0, 0.5, len(t))
 simulated_click = 2.0 * np.sin(2 * np.pi * 3025 * t)  # A 3025Hz "bone click"
@@ -50,7 +36,6 @@ plt.subplot(2, 1, 1)
 plt.plot(t[:500], raw_signal[:500], label="Raw Acoustic Signal")
 plt.title("Time Domain: Pre-Filter")
 plt.legend()
-
 plt.subplot(2, 1, 2)
 plt.plot(t[:500], filtered_signal[:500], color='red', label="3000Hz Bandpass Output")
 plt.title("Time Domain: Post-Filter (Crepitus Extraction)")
