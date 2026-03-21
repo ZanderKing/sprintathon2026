@@ -1,6 +1,7 @@
 """
 Fresh Streamlit Dashboard - Using Data Visualisation.py Algorithms Only
 Shows 3-phase analysis: Macro-Movement (Swings), Micro-Acoustic (Cracks), and Spectrogram
+Multi-page dashboard with summary and detailed analysis
 """
 
 import streamlit as st
@@ -10,6 +11,7 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 from scipy.signal import butter, filtfilt, find_peaks, spectrogram
 from pathlib import Path
+from datetime import datetime
 
 # ==========================================
 # PAGE CONFIGURATION
@@ -37,7 +39,7 @@ ENVELOPE_CUTOFF = 2
 
 # Noise Floor Gates
 MIN_SWING_VOLUME = 50
-MIN_CRACK_VOLUME = 100
+MIN_CRACK_VOLUME = 500
 
 # ==========================================
 # STYLING
@@ -133,7 +135,9 @@ def get_health_status(crepitus_events, swing_count):
     
     if crepitus_events == 0:
         return "Healthy", "🟢"
-    elif crepitus_per_swing < 0.7:
+    elif crepitus_per_swing < 0.2:
+        return "Healthy", "🟢"
+    elif crepitus_per_swing <= 0.7:
         return "At Risk", "🟠"
     else:
         return "Possible KOA", "🔴"
@@ -216,6 +220,10 @@ def analyze_data(csv_path):
     crack_signal = filtfilt(b_crack, a_crack, raw_signal)
     crack_signal_gated = np.where(np.abs(crack_signal) > MIN_CRACK_VOLUME, crack_signal, 0)
     
+    # Detect crepitus events (bone pops) as distinct peaks in the crack signal
+    crack_peaks, _ = find_peaks(np.abs(crack_signal), height=MIN_CRACK_VOLUME, distance=int(SAMPLE_RATE * 0.05))
+    crepitus_event_count = len(crack_peaks)
+    
     # ==========================================
     # ALGORITHM 2: SWING TRACKING (ENVELOPE)
     # ==========================================
@@ -246,6 +254,8 @@ def analyze_data(csv_path):
         'peaks': peaks,
         'swing_count': swing_count,
         'crack_signal_gated': crack_signal_gated,
+        'crepitus_event_count': crepitus_event_count,
+        'crack_peaks': crack_peaks,
         'f': f,
         't': t,
         'Sxx': Sxx,
@@ -432,7 +442,7 @@ def create_visualizations(data):
     return fig
 
 # ==========================================
-# MAIN DASHBOARD
+# MAIN DASHBOARD - MULTI-PAGE STRUCTURE
 # ==========================================
 
 # Display file info
@@ -445,217 +455,307 @@ if st.button("🔍 Analyze Data", type="primary", use_container_width=True):
             # Run analysis
             data = analyze_data(file_path)
             swing_count = data['swing_count']
-            crack_events = np.sum(np.abs(data['crack_signal_gated']) > MIN_CRACK_VOLUME)
+            crack_events = data['crepitus_event_count']
             
             # Update session state history
             st.session_state.analysis_history[selected_file] = {
                 'swing_count': swing_count,
                 'crepitus_events': crack_events,
-                'data': data
+                'data': data,
+                'timestamp': datetime.now()
             }
             
-            # Display results
-            st.success("✅ Analysis Complete!")
-            
-            st.divider()
-            
-            # ==========================================
-            # SECTION 1: LATEST MEASUREMENT & STATUS
-            # ==========================================
-            st.subheader("📊 Latest Assessment")
-            
-            health_status, health_emoji = get_health_status(crack_events, swing_count)
-            
-            col1, col2 = st.columns(2)
-            
-            with col1:
-                st.markdown(f"""
-                <div class="metric-box">
-                    <div style="font-size: 0.9rem; color: #666;">Latest Measurement</div>
-                    <div style="font-size: 2.5rem; font-weight: bold; color: #1f77b4; margin: 0.5rem 0;">
-                        {crack_events}
-                    </div>
-                    <div style="font-size: 0.85rem; color: #666;">Crepitus Events Detected</div>
-                </div>
-                """, unsafe_allow_html=True)
-            
-            with col2:
-                status_color = "#4caf50" if health_status == "Healthy" else ("#ff9800" if health_status == "At Risk" else "#f44336")
-                st.markdown(f"""
-                <div class="status-box">
-                    <div style="font-size: 0.9rem; color: #666;">Latest Status</div>
-                    <div style="font-size: 1.8rem; margin: 0.5rem 0;">{health_emoji}</div>
-                    <div style="font-size: 1.5rem; font-weight: bold; color: {status_color};">
-                        {health_status}
-                    </div>
-                </div>
-                """, unsafe_allow_html=True)
-            
-            st.divider()
-            
-            # ==========================================
-            # SECTION 2: MONITORING & ANALYSIS TABS
-            # ==========================================
-            
-            # Prepare data for weekly monitoring
-            analyzed_files = sorted(list(st.session_state.analysis_history.keys()))
-            
-            # Create tabs
-            tab_names = ["Weekly Monitoring"] + analyzed_files
-            tabs = st.tabs(tab_names)
-            
-            # ==========================================
-            # TAB 0: WEEKLY MONITORING
-            # ==========================================
-            with tabs[0]:
-                st.subheader("📈 Crepitus Events Timeline")
-                
-                if len(analyzed_files) > 1:
-                    # Create weekly monitoring chart
-                    timeline_data = {
-                        'File': analyzed_files,
-                        'Crepitus Events': [st.session_state.analysis_history[f]['crepitus_events'] for f in analyzed_files],
-                        'Swings': [st.session_state.analysis_history[f]['swing_count'] for f in analyzed_files]
-                    }
-                    
-                    fig_weekly = go.Figure()
-                    
-                    fig_weekly.add_trace(go.Scatter(
-                        x=timeline_data['File'],
-                        y=timeline_data['Crepitus Events'],
-                        mode='lines+markers',
-                        name='Crepitus Events',
-                        line=dict(color='#f44336', width=3),
-                        marker=dict(size=10),
-                        hovertemplate='<b>%{x}</b><br>Crepitus Events: %{y}<extra></extra>'
-                    ))
-                    
-                    fig_weekly.update_layout(
-                        title="<b>Crepitus Events Trend Over Time</b>",
-                        xaxis_title="CSV File (Chronological Order)",
-                        yaxis_title="Number of Crepitus Events",
-                        height=400,
-                        hovermode='closest',
-                        plot_bgcolor='rgba(240,240,240,0.5)',
-                        template='plotly_white'
-                    )
-                    
-                    st.plotly_chart(fig_weekly, use_container_width=True, config={"displayModeBar": True})
-                    
-                    st.info("📌 This chart shows the trend of crepitus events across all analyzed measurements. An increasing trend may indicate joint deterioration.")
-                else:
-                    st.info("📌 Analyze multiple CSV files to see the weekly monitoring chart.")
-            
-            # ==========================================
-            # TABS 1+: INDIVIDUAL FILE ANALYSES
-            # ==========================================
-            for idx, file_name in enumerate(analyzed_files, 1):
-                with tabs[idx]:
-                    file_data = st.session_state.analysis_history[file_name]
-                    file_swing_count = file_data['swing_count']
-                    file_crack_events = file_data['crepitus_events']
-                    
-                    # Get health status for this file
-                    file_status, file_emoji = get_health_status(file_crack_events, file_swing_count)
-                    recommendations = get_recommendations(file_status)
-                    
-                    # Status callout
-                    status_color = "#4caf50" if file_status == "Healthy" else ("#ff9800" if file_status == "At Risk" else "#f44336")
-                    
-                    if file_status == "Healthy":
-                        st.markdown(f"""
-                        <div class="success-box">
-                            <div style="font-size: 1.3rem; margin-bottom: 1rem;">
-                                <b>{file_emoji} Knee Health Status: {file_status}</b>
-                            </div>
-                            <div style="margin-bottom: 1rem;">
-                                <b>Clinical Assessment:</b> No crepitus events detected. Your knee joint shows healthy acoustic characteristics.
-                            </div>
-                            <div>
-                                <b>Recommended Actions:</b>
-                                <ul>
-                        """, unsafe_allow_html=True)
-                        for rec in recommendations:
-                            st.markdown(f"<li>{rec}</li>", unsafe_allow_html=True)
-                        st.markdown("</ul></div></div>", unsafe_allow_html=True)
-                    
-                    elif file_status == "At Risk":
-                        crepitus_per_swing = file_crack_events / file_swing_count if file_swing_count > 0 else 0
-                        st.markdown(f"""
-                        <div class="warning-box">
-                            <div style="font-size: 1.3rem; margin-bottom: 1rem;">
-                                <b>{file_emoji} Knee Health Status: {file_status}</b>
-                            </div>
-                            <div style="margin-bottom: 1rem;">
-                                <b>Clinical Assessment:</b> Mild crepitus detected ({file_crack_events} events, {crepitus_per_swing:.2f} per swing). This may indicate early joint involvement.
-                            </div>
-                            <div>
-                                <b>Recommended Actions:</b>
-                                <ul>
-                        """, unsafe_allow_html=True)
-                        for rec in recommendations:
-                            st.markdown(f"<li>{rec}</li>", unsafe_allow_html=True)
-                        st.markdown("</ul></div></div>", unsafe_allow_html=True)
-                    
-                    else:  # Possible KOA
-                        crepitus_per_swing = file_crack_events / file_swing_count if file_swing_count > 0 else 0
-                        st.markdown(f"""
-                        <div class="danger-box">
-                            <div style="font-size: 1.3rem; margin-bottom: 1rem;">
-                                <b>{file_emoji} Knee Health Status: {file_status}</b>
-                            </div>
-                            <div style="margin-bottom: 1rem;">
-                                <b>Clinical Assessment:</b> Significant crepitus detected ({file_crack_events} events, {crepitus_per_swing:.2f} per swing). This pattern is consistent with possible knee osteoarthritis.
-                            </div>
-                            <div>
-                                <b>Recommended Actions:</b>
-                                <ul>
-                        """, unsafe_allow_html=True)
-                        for rec in recommendations:
-                            st.markdown(f"<li>{rec}</li>", unsafe_allow_html=True)
-                        st.markdown("</ul></div></div>", unsafe_allow_html=True)
-                    
-                    st.divider()
-                    
-                    # Display the 3-phase visualization
-                    st.subheader("📊 Three-Phase Clinical Analysis")
-                    fig = create_visualizations(file_data['data'])
-                    st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": True, "responsive": True})
-                    
-                    # Summary statistics
-                    st.divider()
-                    st.subheader("📋 Detailed Analysis")
-                    
-                    col1, col2, col3, col4 = st.columns(4)
-                    with col1:
-                        st.metric("🔴 Swings", file_swing_count)
-                    with col2:
-                        st.metric("⚡ Crepitus Events", file_crack_events)
-                    with col3:
-                        crepitus_ratio = file_crack_events / file_swing_count if file_swing_count > 0 else 0
-                        st.metric("📊 Events/Swing", f"{crepitus_ratio:.2f}")
-                    with col4:
-                        st.metric("⏱️ Duration", f"{file_data['data']['df']['Time_sec'].max():.1f}s")
+            st.success("✅ Analysis Complete! Go to Summary to view results.")
+            st.rerun()
             
         except Exception as e:
             st.error(f"❌ Error processing file: {str(e)}")
-            st.stop()
-else:
-    # Initial state message
-    st.markdown(f"""
-    <div class="warning-box">
-    <b>ℹ️ Getting Started:</b>
-    <br><br>
-    1. Select a CSV file from the data folder using the sidebar
-    <br>2. Click the <b>Analyze Data</b> button above
-    <br>3. View the three-phase clinical analysis:
-    <br>&nbsp;&nbsp;• <b>Phase 1:</b> Macro-Movement Tracking (leg swings)
-    <br>&nbsp;&nbsp;• <b>Phase 2:</b> Micro-Acoustic Tracking (snaps/cracks)
-    <br>&nbsp;&nbsp;• <b>Phase 3:</b> Frequency Spectrogram (time-frequency analysis)
-    <br><br>
-    <b>Data Requirements:</b> CSV files must have 'Timestamp' and 'Signal' columns
-    </div>
-    """, unsafe_allow_html=True)
+
+# ==========================================
+# PAGE SELECTION
+# ==========================================
+st.divider()
+
+page = st.radio(
+    "📱 Select Page:",
+    ["Summary", "Detailed Statistics"],
+    horizontal=True
+)
+
+# ==========================================
+# PAGE 1: SUMMARY
+# ==========================================
+if page == "Summary":
+    st.subheader("📊 Summary Dashboard")
+    
+    if len(st.session_state.analysis_history) == 0:
+        st.info("📌 Analyze at least one CSV file to see summary statistics.")
+    else:
+        # Dropdown to select which analysis to display
+        analyzed_files = sorted(list(st.session_state.analysis_history.keys()))
+        
+        # Calculate weekly average
+        total_crepitus = sum([v['crepitus_events'] for v in st.session_state.analysis_history.values()])
+        total_swings = sum([v['swing_count'] for v in st.session_state.analysis_history.values()])
+        weekly_avg_crepitus = total_crepitus / len(analyzed_files) if len(analyzed_files) > 0 else 0
+        weekly_avg_swings = total_swings / len(analyzed_files) if len(analyzed_files) > 0 else 0
+        
+        # Add "Weekly Average" option at the beginning
+        display_options = ["📊 Weekly Average"] + analyzed_files
+        selected_display = st.selectbox(
+            "Select which data to display:",
+            display_options,
+            index=0
+        )
+        
+        # Determine which data to show
+        is_weekly_average = selected_display == "📊 Weekly Average"
+        
+        if is_weekly_average:
+            display_crepitus = weekly_avg_crepitus
+            display_swings = weekly_avg_swings
+            display_status = "Weekly Average"
+            health_status, health_emoji = get_health_status(display_crepitus, display_swings)
+        else:
+            file_data = st.session_state.analysis_history[selected_display]
+            display_crepitus = file_data['crepitus_events']
+            display_swings = file_data['swing_count']
+            display_status = selected_display
+            health_status, health_emoji = get_health_status(display_crepitus, display_swings)
+        
+        # Display status boxes - adjusted columns based on view type
+        if is_weekly_average:
+            col1, col2 = st.columns(2)
+        else:
+            col1, col2, col3 = st.columns(3)
+        
+        with col1:
+            st.markdown(f"""
+            <div class="metric-box">
+                <div style="font-size: 0.9rem; color: #666;">Crepitus Events</div>
+                <div style="font-size: 2.5rem; font-weight: bold; color: #1f77b4; margin: 0.5rem 0;">
+                    {display_crepitus:.1f}
+                </div>
+                <div style="font-size: 0.85rem; color: #666;">({display_status})</div>
+            </div>
+            """, unsafe_allow_html=True)
+        
+        with col2:
+            status_color = "#4caf50" if health_status == "Healthy" else ("#ff9800" if health_status == "At Risk" else "#f44336")
+            st.markdown(f"""
+            <div class="status-box">
+                <div style="font-size: 0.9rem; color: #666;">Knee Health Status</div>
+                <div style="font-size: 1.8rem; margin: 0.5rem 0;">{health_emoji}</div>
+                <div style="font-size: 1.5rem; font-weight: bold; color: {status_color};">
+                    {health_status}
+                </div>
+            </div>
+            """, unsafe_allow_html=True)
+        
+        if not is_weekly_average:
+            with col3:
+                crepitus_per_swing = display_crepitus / display_swings if display_swings > 0 else 0
+                st.markdown(f"""
+                <div class="metric-box">
+                    <div style="font-size: 0.9rem; color: #666;">Events per Swing</div>
+                    <div style="font-size: 2.5rem; font-weight: bold; color: #1f77b4; margin: 0.5rem 0;">
+                        {crepitus_per_swing:.2f}
+                    </div>
+                    <div style="font-size: 0.85rem; color: #666;">Crepitus Ratio</div>
+                </div>
+                """, unsafe_allow_html=True)
+        
+        st.divider()
+        
+        # Show time series graph for weekly average
+        if is_weekly_average:
+            st.subheader("📈 Crepitus Events Timeline")
+            
+            if len(analyzed_files) > 1:
+                # Create weekly monitoring chart
+                timeline_data = {
+                    'File': analyzed_files,
+                    'Crepitus Events': [st.session_state.analysis_history[f]['crepitus_events'] for f in analyzed_files],
+                }
+                
+                fig_weekly = go.Figure()
+                
+                fig_weekly.add_trace(go.Scatter(
+                    x=timeline_data['File'],
+                    y=timeline_data['Crepitus Events'],
+                    mode='lines+markers',
+                    name='Crepitus Events',
+                    line=dict(color='#f44336', width=3),
+                    marker=dict(size=10),
+                    hovertemplate='<b>%{x}</b><br>Crepitus Events: %{y}<extra></extra>'
+                ))
+                
+                fig_weekly.update_layout(
+                    title="<b>Crepitus Events Trend Over Time</b>",
+                    xaxis_title="CSV File (Chronological Order)",
+                    yaxis_title="Number of Crepitus Events",
+                    height=400,
+                    hovermode='closest',
+                    plot_bgcolor='rgba(240,240,240,0.5)',
+                    template='plotly_white'
+                )
+                
+                st.plotly_chart(fig_weekly, use_container_width=True, config={"displayModeBar": True})
+                
+                st.info("📌 This chart shows the trend of crepitus events across all analyzed measurements. An increasing trend may indicate joint deterioration.")
+            else:
+                st.info("📌 Analyze multiple CSV files to see the weekly monitoring chart.")
+            
+            st.divider()
+        
+        # Display recommendations
+        recommendations = get_recommendations(health_status)
+        
+        if health_status == "Healthy":
+            st.markdown(f"""
+            <div class="success-box">
+                <div style="font-size: 1.3rem; margin-bottom: 1rem;">
+                    <b>✅ Healthy Knee Joint</b>
+                </div>
+                <div style="margin-bottom: 1rem;">
+                    <b>Clinical Assessment:</b> Your knee shows healthy acoustic characteristics with no significant crepitus detected.
+                </div>
+                <div>
+                    <b>Recommended Actions:</b>
+                    <ul>
+            """, unsafe_allow_html=True)
+        elif health_status == "At Risk":
+            st.markdown(f"""
+            <div class="warning-box">
+                <div style="font-size: 1.3rem; margin-bottom: 1rem;">
+                    <b>⚠️ At Risk</b>
+                </div>
+                <div style="margin-bottom: 1rem;">
+                    <b>Clinical Assessment:</b> Mild crepitus detected. Early intervention may help prevent further joint deterioration.
+                </div>
+                <div>
+                    <b>Recommended Actions:</b>
+                    <ul>
+            """, unsafe_allow_html=True)
+        else:
+            st.markdown(f"""
+            <div class="danger-box">
+                <div style="font-size: 1.3rem; margin-bottom: 1rem;">
+                    <b>🔴 Possible KOA</b>
+                </div>
+                <div style="margin-bottom: 1rem;">
+                    <b>Clinical Assessment:</b> Significant crepitus pattern detected. This may indicate knee osteoarthritis. Professional evaluation recommended.
+                </div>
+                <div>
+                    <b>Recommended Actions:</b>
+                    <ul>
+            """, unsafe_allow_html=True)
+        
+        for rec in recommendations:
+            st.markdown(f"<li>{rec}</li>", unsafe_allow_html=True)
+        st.markdown("</ul></div></div>", unsafe_allow_html=True)
+
+# ==========================================
+# PAGE 2: DETAILED STATISTICS
+# ==========================================
+elif page == "Detailed Statistics":
+    st.subheader("📈 Detailed Analysis")
+    
+    if len(st.session_state.analysis_history) == 0:
+        st.info("📌 Analyze at least one CSV file to view detailed statistics.")
+    else:
+        analyzed_files = sorted(list(st.session_state.analysis_history.keys()))
+        
+        # Dropdown to select which analysis to display
+        selected_file_detail = st.selectbox(
+            "Select which CSV file to analyze:",
+            analyzed_files,
+            key="detail_selectbox"
+        )
+        
+        file_data = st.session_state.analysis_history[selected_file_detail]
+        file_swing_count = file_data['swing_count']
+        file_crack_events = file_data['crepitus_events']
+        
+        # Get health status for this file
+        file_status, file_emoji = get_health_status(file_crack_events, file_swing_count)
+        recommendations = get_recommendations(file_status)
+        
+        # Status callout
+        if file_status == "Healthy":
+            st.markdown(f"""
+            <div class="success-box">
+                <div style="font-size: 1.3rem; margin-bottom: 1rem;">
+                    <b>{file_emoji} Knee Health Status: {file_status}</b>
+                </div>
+                <div style="margin-bottom: 1rem;">
+                    <b>Clinical Assessment:</b> No crepitus events detected. Your knee joint shows healthy acoustic characteristics.
+                </div>
+                <div>
+                    <b>Recommended Actions:</b>
+                    <ul>
+            """, unsafe_allow_html=True)
+            for rec in recommendations:
+                st.markdown(f"<li>{rec}</li>", unsafe_allow_html=True)
+            st.markdown("</ul></div></div>", unsafe_allow_html=True)
+        
+        elif file_status == "At Risk":
+            crepitus_per_swing = file_crack_events / file_swing_count if file_swing_count > 0 else 0
+            st.markdown(f"""
+            <div class="warning-box">
+                <div style="font-size: 1.3rem; margin-bottom: 1rem;">
+                    <b>{file_emoji} Knee Health Status: {file_status}</b>
+                </div>
+                <div style="margin-bottom: 1rem;">
+                    <b>Clinical Assessment:</b> Mild crepitus detected ({file_crack_events} events, {crepitus_per_swing:.2f} per swing). This may indicate early joint involvement.
+                </div>
+                <div>
+                    <b>Recommended Actions:</b>
+                    <ul>
+            """, unsafe_allow_html=True)
+            for rec in recommendations:
+                st.markdown(f"<li>{rec}</li>", unsafe_allow_html=True)
+            st.markdown("</ul></div></div>", unsafe_allow_html=True)
+        
+        else:  # Possible KOA
+            crepitus_per_swing = file_crack_events / file_swing_count if file_swing_count > 0 else 0
+            st.markdown(f"""
+            <div class="danger-box">
+                <div style="font-size: 1.3rem; margin-bottom: 1rem;">
+                    <b>{file_emoji} Knee Health Status: {file_status}</b>
+                </div>
+                <div style="margin-bottom: 1rem;">
+                    <b>Clinical Assessment:</b> Significant crepitus detected ({file_crack_events} events, {crepitus_per_swing:.2f} per swing). This pattern is consistent with possible knee osteoarthritis.
+                </div>
+                <div>
+                    <b>Recommended Actions:</b>
+                    <ul>
+            """, unsafe_allow_html=True)
+            for rec in recommendations:
+                st.markdown(f"<li>{rec}</li>", unsafe_allow_html=True)
+            st.markdown("</ul></div></div>", unsafe_allow_html=True)
+        
+        st.divider()
+        
+        # Display the 3-phase visualization
+        st.subheader("📊 Three-Phase Clinical Analysis")
+        fig = create_visualizations(file_data['data'])
+        st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": True, "responsive": True})
+        
+        # Summary statistics
+        st.divider()
+        st.subheader("📋 Measurement Details")
+        
+        col1, col2, col3, col4 = st.columns(4)
+        with col1:
+            st.metric("🔴 Leg Swings Detected", file_swing_count)
+        with col2:
+            st.metric("⚡ Bone Pops Detected", file_crack_events)
+        with col3:
+            crepitus_ratio = file_crack_events / file_swing_count if file_swing_count > 0 else 0
+            st.metric("📊 Pops per Swing", f"{crepitus_ratio:.2f}")
+        with col4:
+            st.metric("⏱️ Recording Duration", f"{file_data['data']['df']['Time_sec'].max():.1f}s")
 
 # ==========================================
 # FOOTER
